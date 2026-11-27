@@ -1,0 +1,33 @@
+ggml-vulkan: add ggml_vk_debug_enumerate() physical-device listing
+
+Mobile drivers often expose more than one Vulkan device and the backend
+silently picks one, so a wrong-GPU bug is invisible from inside an app.
+This exports a pre-filter enumeration (name, type, vendor) for
+diagnostics. No behaviour change to inference.
+diff --git a/src/ggml-vulkan/ggml-vulkan.cpp b/src/ggml-vulkan/ggml-vulkan.cpp
+index 47318cd2..5ce2e1b7 100644
+--- a/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -13659,6 +13659,22 @@ int ggml_vk_get_device_count() {
+     return vk_instance.device_indices.size();
+ }
+ 
++// Klein debug helper: enumerate ALL physical devices (pre-filter), with types.
++__attribute__((visibility("default"))) extern "C" int ggml_vk_debug_enumerate(char (*names)[256], int max, int * count_out) {
++    if (!vk_instance_initialized || !vk_instance.instance) { *count_out = 0; return -1; }
++    uint32_t n = 0;
++    vk_instance.instance.enumeratePhysicalDevices(&n, nullptr);
++    if (n > (uint32_t)max) n = (uint32_t)max;
++    std::vector<vk::PhysicalDevice> devs(n);
++    vk_instance.instance.enumeratePhysicalDevices(&n, devs.data());
++    for (uint32_t i = 0; i < n; i++) {
++        auto props = devs[i].getProperties();
++        snprintf(names[i], 256, "type=%u vendor=%u %s", (uint32_t)props.deviceType, props.vendorID, (const char*)props.deviceName.data());
++    }
++    *count_out = (int)n;
++    return 0;
++}
++
+ void ggml_vk_get_device_description(int device, char * description, size_t description_size) {
+     ggml_vk_instance_init();
+ 
