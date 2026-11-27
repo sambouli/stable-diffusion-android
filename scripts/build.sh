@@ -42,22 +42,27 @@ if [[ " $BACKENDS " == *" vulkan "* ]]; then
   [[ -n "$SPIRV_HDR_DIR" ]] || { echo "no SPIRV-Headers cmake package under $VULKAN_SDK"; exit 1; }
 
   # Host SDK supplies glslc + SPIRV-Headers; the *link* target is the NDK stub.
+  # Vulkan entry points resolve from the vendor driver at runtime, so the link
+  # step must tolerate undefined vk* symbols (-Wl,-z,undefs).
   extra+=(
     -DGGML_VULKAN=ON
-    # ggml-vulkan's CMake does find_package(SPIRV-Headers); the LunarG SDK
-    # ships the config package, so point CMake straight at it.
     -DSPIRV-Headers_DIR="$SPIRV_HDR_DIR"
     -DCMAKE_PREFIX_PATH="$SPIRV_HDR_DIR;$VULKAN_SDK"
     -DVulkan_GLSLC_EXECUTABLE="$VULKAN_SDK/bin/glslc"
     -DVulkan_INCLUDE_DIR="$VULKAN_SDK/include"
     -DVulkan_LIBRARY="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/$API/libvulkan.so"
-    # Vulkan entry points resolve from the driver at runtime, so the link step
-    # must tolerate undefined vk* symbols that the NDK stub does not provide.
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--undefined-version -Wl,-z,undefs"
   )
 else
   extra+=(-DGGML_VULKAN=OFF)
 fi
+
+# GGML_OPENMP=OFF: OpenMP would add a libomp.so NEEDED entry that is absent
+# from the device sysroot, making System.load() fail at runtime.
+#
+# Two prefix maps because ggml is a *nested* submodule: mapping $ROOT alone
+# leaves sdcpp/ggml sources carrying absolute build-machine paths in the .so.
+PREFIX_MAP="-ffile-prefix-map=$ROOT=. -ffile-prefix-map=$ROOT/sdcpp/ggml=ggml"
 
 rm -rf "$OUT/CMakeCache.txt"
 cmake -S "$ROOT" -B "$OUT" -G Ninja \
@@ -65,10 +70,12 @@ cmake -S "$ROOT" -B "$OUT" -G Ninja \
   -DANDROID_ABI="$ABI" -DANDROID_PLATFORM="android-$API" -DANDROID_STL=c++_static \
   -DCMAKE_BUILD_TYPE=Release \
   -DSD_BUILD_SHARED_LIBS=ON -DSD_BUILD_EXAMPLES=OFF \
+  -DGGML_OPENMP=OFF \
   -DSD_WEBP=OFF -DSD_WEBM=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-  -DCMAKE_C_FLAGS="-ffile-prefix-map=$ROOT=." \
-  -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$ROOT=." \
+  -DCMAKE_C_FLAGS="$PREFIX_MAP" \
+  -DCMAKE_CXX_FLAGS="$PREFIX_MAP" \
+  -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$ROOT=. -ffile-prefix-map=$ROOT/sdcpp/ggml=ggml" \
   "${extra[@]}"
 
 cmake --build "$OUT" -j"$(nproc)"
